@@ -17,22 +17,20 @@ class MuZeroConfig:
 
 
         ### Game
-        self.observation_shape = (3, 3, 3)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(9))  # Fixed list of all possible actions. You should only edit the length
+        self.observation_shape = (1, 4, 4)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.action_space = list(range(64))  # Fixed list of all possible actions. You should only edit the length
         self.players = list(range(2))  # List of players. You should only edit the length
         self.stacked_observations = 0  # Number of previous observations and previous actions to add to the current observation
 
         # Evaluate
         self.muzero_player = 0  # Turn Muzero begins to play (0: MuZero plays first, 1: MuZero plays second)
-        self.opponent = "expert"  # Hard coded agent that MuZero faces to assess his progress in multiplayer games. It doesn't influence training. None, "random" or "expert" if implemented in the Game class
-
-
+        self.opponent = "random"  # Hard coded agent that MuZero faces to assess his progress in multiplayer games. It doesn't influence training. None, "random" or "expert" if implemented in the Game class
 
         ### Self-Play
         self.num_workers = 1  # Number of simultaneous threads/workers self-playing to feed the replay buffer
         self.selfplay_on_gpu = False
-        self.max_moves = 9  # Maximum number of moves if game is not finished before
-        self.num_simulations = 25  # Number of future moves self-simulated
+        self.max_moves = 16  # Maximum number of moves if game is not finished before
+        self.num_simulations = 32  # Number of future moves self-simulated
         self.discount = 1  # Chronological discount of the reward
         self.temperature_threshold = None  # Number of moves before dropping the temperature given by visit_softmax_temperature_fn to 0 (ie selecting the best action). If None, visit_softmax_temperature_fn is used every time
 
@@ -43,8 +41,6 @@ class MuZeroConfig:
         # UCB formula
         self.pb_c_base = 19652
         self.pb_c_init = 1.25
-
-
 
         ### Network
         self.network = "resnet"  # "resnet" / "fullyconnected"
@@ -93,16 +89,14 @@ class MuZeroConfig:
 
         ### Replay Buffer
         self.replay_buffer_size = 3000  # Number of self-play games to keep in the replay buffer
-        self.num_unroll_steps = 20  # Number of game moves to keep for every batch element
-        self.td_steps = 20  # Number of steps in the future to take into account for calculating the target value
+        self.num_unroll_steps = 32  # Number of game moves to keep for every batch element
+        self.td_steps = 32  # Number of steps in the future to take into account for calculating the target value
         self.PER = True  # Prioritized Replay (See paper appendix Training), select in priority the elements in the replay buffer which are unexpected for the network
         self.PER_alpha = 0.5  # How much prioritization is used, 0 corresponding to the uniform case, paper suggests 1
 
         # Reanalyze (See paper appendix Reanalyse)
         self.use_last_model_value = True  # Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
         self.reanalyse_on_gpu = False
-
-
 
         ### Adjust the self play / training ratio to avoid over/underfitting
         self.self_play_delay = 0  # Number of seconds to wait after each played game
@@ -127,7 +121,7 @@ class Game(AbstractGame):
     """
 
     def __init__(self, seed=None):
-        self.env = TicTacToe()
+        self.env = PetesGame()
 
     def step(self, action):
         """
@@ -155,10 +149,10 @@ class Game(AbstractGame):
         """
         Should return the legal actions at each turn, if it is not available, it can return
         the whole action space. At each turn, the game have to be able to handle one of returned actions.
-        
+
         For complex game where calculating legal moves is too long, the idea is to define the legal actions
         equal to the action space but to return a negative reward if the action is illegal.
-    
+
         Returns:
             An array of integers, subset of the action space.
         """
@@ -167,7 +161,7 @@ class Game(AbstractGame):
     def reset(self):
         """
         Reset the game for a new game.
-        
+
         Returns:
             Initial observation of the game.
         """
@@ -192,13 +186,13 @@ class Game(AbstractGame):
             try:
                 choice = int(
                     input(
-                        f"Enter the cell (0-8) to play for the player {self.to_play()}: "
+                        f"Enter the action (0-31) to play for the player {self.to_play()}: "
                     )
                 )
                 if (
                     choice in self.legal_actions()
                     and 0 <= choice
-                    and choice <= 8
+                    and choice < 64
                 ):
                     break
             except:
@@ -206,149 +200,159 @@ class Game(AbstractGame):
             print("Wrong input, try again")
         return choice
 
-    def expert_agent(self):
-        """
-        Hard coded agent that MuZero faces to assess his progress in multiplayer games.
-        It doesn't influence training
-
-        Returns:
-            Action as an integer to take in the current game state
-        """
-        return self.env.expert_action()
-
     def action_to_string(self, action_number):
         """
         Convert an action number to a string representing the action.
-        
+
         Args:
             action_number: an integer from the action space.
 
         Returns:
             String representing the action.
         """
-        return f"Play cell {action_number}"
+        return str(self.env.parse_action(action_number))
 
 
-class TicTacToe:
+class PetesGame:
     def __init__(self):
-        self.board = numpy.zeros((3, 3), dtype="int32")
-        self.player = 1
+        self.size = 4
+        self.reset()
 
     def to_play(self):
         return 0 if self.player == 1 else 1
 
     def reset(self):
-        self.board = numpy.zeros((3, 3), dtype="int32")
+        self.board = numpy.zeros((self.size, self.size), dtype="int32")
         self.player = 1
-        return self.get_observation()
+        return numpy.array([self.board], dtype="int32")
+
+    def parse_action(self, action):
+        if action < 16:
+            row = action // self.size
+            col = action % self.size
+            return (row,1, col,1)
+        elif action < 28:
+            action -= 16
+            row = action // (self.size - 1)
+            col = action % (self.size - 1)
+            return(row,1, col,2)
+        elif action < 36:
+            action -= 28
+            row = action // (self.size - 2)
+            col = action % (self.size - 2)
+            return (row,1, col,3)
+        elif action < 40:
+            action -= 36
+            row = action // (self.size - 3)
+            col = action % (self.size - 3)
+            return (row,1, col,4)
+        elif action < 52:
+            action -= 40
+            row = action // self.size
+            col = action % self.size
+            return (row,2, col,1)
+        elif action < 60:
+            action -= 52
+            row = action // self.size
+            col = action % self.size
+            return (row,3, col,1)
+        elif action < 64:
+            action -= 60
+            row = action // self.size
+            col = action % self.size
+            return (row,4, col,1)
 
     def step(self, action):
-        row = action // 3
-        col = action % 3
-        self.board[row, col] = self.player
+        (r1,r2,c1,c2) = self.parse_action(action)
+        self.board[r1:r1+r2,c1:c1+c2] = 1
 
-        done = self.have_winner() or len(self.legal_actions()) == 0
+        free_cells = numpy.count_nonzero(numpy.where(self.board == 0, 1, 0))
 
-        reward = 1 if self.have_winner() else 0
+        done = 0 if free_cells > 0 else 1
+
+        if free_cells == 0:
+            reward = -1
+        elif free_cells == 1:
+            reward = 1
+        else:
+            reward = 0
 
         self.player *= -1
 
-        return self.get_observation(), reward, done
-
-    def get_observation(self):
-        board_player1 = numpy.where(self.board == 1, 1, 0)
-        board_player2 = numpy.where(self.board == -1, 1, 0)
-        board_to_play = numpy.full((3, 3), self.player)
-        return numpy.array([board_player1, board_player2, board_to_play], dtype="int32")
+        return numpy.array([self.board], dtype="int32"), reward, done
 
     def legal_actions(self):
-        legal = []
-        for i in range(9):
-            row = i // 3
-            col = i % 3
+        actions = []
+
+        offset = 0
+
+        # 1x1 cells
+        for i in range(self.size * self.size):
+            row = i // self.size
+            col = i % self.size
             if self.board[row, col] == 0:
-                legal.append(i)
-        return legal
+                actions.append(i + offset)
+        offset += (self.size * self.size)
 
-    def have_winner(self):
-        # Horizontal and vertical checks
-        for i in range(3):
-            if (self.board[i, :] == self.player * numpy.ones(3, dtype="int32")).all():
-                return True
-            if (self.board[:, i] == self.player * numpy.ones(3, dtype="int32")).all():
-                return True
+        # 1x2 rows
+        for i in range((self.size - 1) * self.size):
+            row = i // (self.size - 1)
+            col = i % (self.size - 1)
+            if numpy.all(self.board[row, col:col+2] == 0):
+                actions.append(i + offset)
+        offset += ((self.size - 1)* self.size)
 
-        # Diagonal checks
-        if (
-            self.board[0, 0] == self.player
-            and self.board[1, 1] == self.player
-            and self.board[2, 2] == self.player
-        ):
-            return True
-        if (
-            self.board[2, 0] == self.player
-            and self.board[1, 1] == self.player
-            and self.board[0, 2] == self.player
-        ):
-            return True
+        # 1x3 rows
+        for i in range((self.size - 2) * self.size):
+            row = i // (self.size - 2)
+            col = i % (self.size - 2)
+            if numpy.all(self.board[row, col:col+3] == 0):
+                actions.append(i + offset)
+        offset += ((self.size - 2)* self.size)
 
-        return False
+        # 1x4 rows
+        for i in range((self.size - 3) * self.size):
+            row = i // (self.size - 3)
+            col = i % (self.size - 3)
+            if numpy.all(self.board[row, col:col+4] == 0):
+                actions.append(i + offset)
+        offset += ((self.size - 3)* self.size)
 
-    def expert_action(self):
-        board = self.board
-        action = numpy.random.choice(self.legal_actions())
-        # Horizontal and vertical checks
-        for i in range(3):
-            if abs(sum(board[i, :])) == 2:
-                ind = numpy.where(board[i, :] == 0)[0][0]
-                action = numpy.ravel_multi_index(
-                    (numpy.array([i]), numpy.array([ind])), (3, 3)
-                )[0]
-                if self.player * sum(board[i, :]) > 0:
-                    return action
+        # 2x1 cols
+        for i in range((self.size - 1) * self.size):
+            row = i // self.size
+            col = i % self.size
+            if numpy.all(self.board[row:row+2, col] == 0):
+                actions.append(i + offset)
+        offset += ((self.size - 1)* self.size)
 
-            if abs(sum(board[:, i])) == 2:
-                ind = numpy.where(board[:, i] == 0)[0][0]
-                action = numpy.ravel_multi_index(
-                    (numpy.array([ind]), numpy.array([i])), (3, 3)
-                )[0]
-                if self.player * sum(board[:, i]) > 0:
-                    return action
+        # 3x1 cols
+        for i in range((self.size - 2) * self.size):
+            row = i // self.size
+            col = i % self.size
+            if numpy.all(self.board[row:row+3, col] == 0):
+                actions.append(i + offset)
+        offset += ((self.size - 2) * self.size)
 
-        # Diagonal checks
-        diag = board.diagonal()
-        anti_diag = numpy.fliplr(board).diagonal()
-        if abs(sum(diag)) == 2:
-            ind = numpy.where(diag == 0)[0][0]
-            action = numpy.ravel_multi_index(
-                (numpy.array([ind]), numpy.array([ind])), (3, 3)
-            )[0]
-            if self.player * sum(diag) > 0:
-                return action
+        # 4x1 cols
+        for i in range((self.size - 3) * self.size):
+            row = i // self.size
+            col = i % self.size
+            if numpy.all(self.board[row:row+4, col] == 0):
+                actions.append(i + offset)
+        offset += ((self.size - 3) * self.size)
 
-        if abs(sum(anti_diag)) == 2:
-            ind = numpy.where(anti_diag == 0)[0][0]
-            action = numpy.ravel_multi_index(
-                (numpy.array([ind]), numpy.array([2 - ind])), (3, 3)
-            )[0]
-            if self.player * sum(anti_diag) > 0:
-                return action
-
-        return action
+        # columns
+        return actions
 
     def render(self):
         board = ""
-        for x in range(3):
-            for y in range(3):
+        for x in range(self.size):
+            for y in range(self.size):
                 cell = self.board[x,y]
                 if cell == 0:
-                    board += ' '
-                elif cell == -1:
-                    board += 'o'
-                elif cell == 1:
-                    board += 'x'
-                if y < 2:
-                    board += '|'
-            if x < 2:
-                board += "\n-+-+-\n"
+                    board += '.'
+                else:
+                    board += '░'
+            board += "\n"
         print(board)
